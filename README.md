@@ -2,24 +2,40 @@
 
 Sistema de llamadas de voz outbound para Hermes usando ElevenLabs ConvAI + Twilio.
 
+## Estructura
+
+```
+.
+├── SKILL.md                    ← Documentación de skill Hermes (modo skill)
+├── README.md                   ← Este archivo (repo independiente)
+├── .gitignore
+├── notifier.env.example        ← Plantilla de configuración
+├── contacts.example.json       ← Ejemplo de agenda de contactos
+├── scripts/
+│   ├── caller.py               ← call_personal / call_social / call_service
+│   ├── call_monitor.py         ← Polling + transcript + summary (auto-spawned)
+│   └── contacts.py             ← resolve() / lookup() / list_all()
+└── references/
+    ├── api.md                  ← Endpoint y errores de ElevenLabs
+    ├── config.md               ← Variables de notifier.env
+    └── prompt-variables.md     ← Variables {{...}} dinámicas de los agentes
+```
+
 ## Arquitectura
 
 ```
 ┌─────────────┐     outbound_call API      ┌──────────────┐
-│  hermes     │ ──────────────────────────→│  ElevenLabs  │
-│  phone      │   + Twilio                 │   ConvAI     │
-│  caller     │                            │  (6 agents)  │
-└─────────────┘                            └──────────────┘
-       │
-       │ spawnea (fire-and-forget)
+│  caller.py  │ ──────────────────────────→│  ElevenLabs  │
+│  scripts/   │   + Twilio                 │   ConvAI     │
+└─────────────┘                            │  (6 agents)  │
+       │ spawn (fire-and-forget)           └──────────────┘
        ▼
 ┌─────────────┐     polling 15s            ┌──────────────┐
-│  call       │ ──────────────────────────→│  ElevenLabs  │
-│  monitor    │   ?include_transcript=true │ Conversations│
-│ (background)│                            └──────────────┘
-└─────────────┘
+│call_monitor │ ──────────────────────────→│  ElevenLabs  │
+│scripts/     │   ?include_transcript=true │ Conversations│
+└─────────────┘                            └──────────────┘
        │
-       │ LLM summary (meta-llama/llama-3-8b-instruct)
+       │ LLM summary (meta-llama/llama-3-8b-instruct vía OpenRouter)
        ▼
 ┌─────────────┐
 │   Telegram  │  ← Prefijo determinístico + evaluación LLM
@@ -28,7 +44,7 @@ Sistema de llamadas de voz outbound para Hermes usando ElevenLabs ConvAI + Twili
 
 ## Configuración
 
-1. Copia `notifier.env.example` a `~/.hermes/notifier.env` y rellena los valores:
+1. Copia y rellena `~/.hermes/notifier.env`:
 
    ```bash
    mkdir -p ~/.hermes
@@ -36,49 +52,57 @@ Sistema de llamadas de voz outbound para Hermes usando ElevenLabs ConvAI + Twili
    chmod 0600 ~/.hermes/notifier.env
    ```
 
-2. Edita el archivo con tus credenciales:
-   - `ELEVENLABS_API_KEY` — API key de ElevenLabs
-   - `ELEVENLABS_PHONE_NUMBER_ID` — ID del número Twilio en ElevenLabs
-   - `HERMES_AGENT_<USE_CASE>_<LANG>` — un agent_id por (caso, idioma)
-   - `OPENROUTER_API_KEY` — para los resúmenes LLM
-   - `TELEGRAM_BOT_TOKEN_NOTIFICATIONS` y `TELEGRAM_CHAT_ID_NOTIFICATIONS`
+2. Añade tu agenda de contactos:
 
-   Ningún ID de agente, número de teléfono o credencial debe vivir en el repo.
+   ```bash
+   cp contacts.example.json ~/.hermes/contacts.json
+   chmod 0600 ~/.hermes/contacts.json
+   ```
 
-## Casos de uso (agentes)
+3. Edita ambos archivos con tus credenciales y contactos.
+   **Ningún ID, número o credencial debe vivir en el repo.**
 
-| Caso     | Variables de entorno requeridas                  | Descripción                                              |
-| -------- | ------------------------------------------------ | -------------------------------------------------------- |
-| Personal | `HERMES_AGENT_PERSONAL_EN` / `_ES`               | Llamada al usuario con un briefing                       |
-| Social   | `HERMES_AGENT_SOCIAL_EN` / `_ES`                 | Llamada a un amigo/familiar con un recado                |
-| Service  | `HERMES_AGENT_SERVICE_EN` / `_ES`                | Llamada a un negocio para reservar/pedir servicio        |
+## Agenda de contactos
+
+El módulo `contacts.py` resuelve aliases como "llama a mamá", "dile a Elena" → contacto completo.
+
+```python
+from scripts.contacts import resolve
+contact = resolve("mi mujer")
+# → {"name": "Elena", "phone": "+44...", "relationship": "mi mujer", "lang": "es"}
+```
+
+Ver `contacts.example.json` para el formato completo.
 
 ## Uso
 
 ```python
-from hermes_phone_caller import call_personal, call_social, call_service
+from scripts.caller import call_personal, call_social, call_service
+from scripts.contacts import resolve
 
 # Briefing personal
 result = call_personal(
     to_number="+44XXXXXXXXXX",
-    caller_name="Alice",
+    caller_name="Alberto",
     briefing_content="Tu vuelo cambió de puerta...",
     objective="Avisar del cambio de puerta",
 )
 
-# Recado social
+# Recado social (con contacto resuelto)
+c = resolve("mi mujer")
 result = call_social(
-    to_number="+44XXXXXXXXXX",
-    recipient_name="Bob",
-    caller_name="Alice",
+    to_number=c["phone"],
+    recipient_name=c["name"],
+    caller_name="Alberto",
     message="Llegaré tarde, no esperes para cenar",
-    relationship="su pareja",
+    relationship=c.get("relationship", ""),
+    lang_hint=c.get("lang"),
 )
 
 # Reserva en un negocio
 result = call_service(
     to_number="+44XXXXXXXXXX",
-    caller_name="Alice Smith",
+    caller_name="Alberto Moreno",
     caller_phone="+44XXXXXXXXXX",
     business_type="restaurante",
     request_type="una mesa para 4",
@@ -89,23 +113,26 @@ result = call_service(
 
 ## Detección de idioma
 
-Auto-detecta EN/ES analizando el texto del mensaje/briefing. Se puede forzar con `lang_hint="en"` / `lang_hint="es"`. El default cuando no hay señal es configurable vía `DEFAULT_LANG` en `notifier.env`.
+Auto-detecta EN/ES desde el texto. Prioridad:
+1. `lang_hint="en"` / `lang_hint="es"` (explícito)
+2. `lang` del contacto resuelto desde `contacts.json`
+3. Palabras clave del mensaje/briefing
+4. `DEFAULT_LANG` en `notifier.env` (default: `es`)
 
 ## Monitor de llamadas
 
-Tras cada llamada exitosa, se lanza automáticamente `call_monitor.py` en background que:
+Tras cada llamada exitosa se lanza automáticamente `call_monitor.py` en background que:
 
-1. Hace polling (cada 15s, hasta 15 min) hasta que la llamada está en estado terminal (`done`, `completed`, `ended`, `failed`, `error`, `cancelled`).
-2. Reintenta unas veces si el status es terminal pero el transcript aún no está indexado.
-3. Extrae la transcripción completa, normalizando los roles (`agent`/`user`/otros).
-4. Resume con LLM evaluando éxito/fracaso, en el mismo idioma de la llamada.
-5. Envía a Telegram con prefijo **determinístico** en Python puro (los datos reales nunca pasan por el LLM).
-6. Guarda JSON en `~/.hermes/call_logs/` y los logs del propio monitor en `~/.hermes/call_logs/monitor_<conv_id>.log`.
+1. Hace polling (cada 15s, hasta 15 min) hasta estado terminal (`done`, `completed`, `ended`, `failed`, `error`, `cancelled`).
+2. Reintenta si el status es terminal pero el transcript aún no está indexado.
+3. Extrae transcripción, normalizando roles `agent`/`user`/otros.
+4. Resume con LLM evaluando éxito/fracaso, en el idioma de la llamada.
+5. Envía a Telegram con prefijo **determinístico** (los datos reales nunca pasan por el LLM).
+6. Guarda JSON en `~/.hermes/call_logs/` y logs del monitor en `~/.hermes/call_logs/monitor_<conv_id>.log`.
 
-## Scripts
+## API y referencias
 
-| Archivo                   | Propósito                                     |
-| ------------------------- | --------------------------------------------- |
-| `hermes_phone_caller.py`  | Rutina de llamadas (3 funciones públicas)     |
-| `call_monitor.py`         | Polling + transcript + summary + notificación |
-| `notifier.env.example`    | Plantilla de configuración                    |
+Ver `references/`:
+- `api.md` — Endpoints de ElevenLabs, errores HTTP
+- `config.md` — Variables de `notifier.env`
+- `prompt-variables.md` — Variables `{{...}}` para cada agente

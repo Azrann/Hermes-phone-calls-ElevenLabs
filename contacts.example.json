@@ -1,0 +1,50 @@
+{
+  "_comment": "Copia este archivo a ~/.hermes/contacts.json y rellénalo. chmod 0600.",
+  "_schema": {
+    "id": "string opcional, único, sin espacios — para referencias inequívocas",
+    "name": "string requerido — SOLO se usa para el saludo del agente ('Hola Isabel'). NO participa en la búsqueda.",
+    "phone": "string requerido — formato E.164, ej: +34XXXXXXXXX",
+    "relationship": "string opcional — SÍ participa en la búsqueda. 'mi madre', 'mi mujer', etc.",
+    "lang": "string opcional ('es' o 'en') — idioma preferido para la llamada",
+    "aliases": "array de strings — ÚNICA fuente de matching junto con id y relationship. Si quieres que el nombre también valga para buscar, añádelo aquí explícitamente."
+  },
+  "_examples_explained": {
+    "case_1": "Madre llamada Isabel: la buscas por 'mamá', 'mami', 'madre', pero el agente la saluda como 'Isabel'.",
+    "case_2": "Amigo llamado John: lo buscas y el agente lo saluda como 'John' (mismo nombre que alias).",
+    "case_3": "Dos Elenas: si AMBAS tienen 'Elena' en aliases, 'llama a Elena' será ambiguo y el sistema pedirá aclaración."
+  },
+  "contacts": [
+    {
+      "id": "mother",
+      "name": "Isabel",
+      "phone": "+34XXXXXXXXX",
+      "relationship": "mi madre",
+      "lang": "es",
+      "aliases": ["mamá", "mami", "madre", "ama"]
+    },
+    {
+      "id": "wife",
+      "name": "Elena",
+      "phone": "+44XXXXXXXXX",
+      "relationship": "mi mujer",
+      "lang": "es",
+      "aliases": ["Elena", "mi mujer", "Ele", "amor"]
+    },
+    {
+      "id": "uncle_pepe",
+      "name": "José",
+      "phone": "+34XXXXXXXXX",
+      "relationship": "mi tío",
+      "lang": "es",
+      "aliases": ["tío Pepe", "Pepe"]
+    },
+    {
+      "id": "friend_john",
+      "name": "John",
+      "phone": "+44XXXXXXXXX",
+      "relationship": "colleague",
+      "lang": "en",
+      "aliases": ["John", "Johnny", "John Smith"]
+    }
+  ]
+}
